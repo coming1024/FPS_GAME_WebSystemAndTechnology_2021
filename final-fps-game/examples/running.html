@@ -1,0 +1,1369 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <style>
+        /*html { filter:progid:DXImageTransform.Microsoft.BasicImage(grayscale=1); }*/
+        #blocker {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
+        #instructions {
+            width: 100%;
+            height: 100%;
+            display: -webkit-box;
+            display: -moz-box;
+            /*display: box;*/
+            -webkit-box-orient: horizontal;
+            -moz-box-orient: horizontal;
+            box-orient: horizontal;
+            -webkit-box-pack: center;
+            -moz-box-pack: center;
+            box-pack: center;
+            -webkit-box-align: center;
+            -moz-box-align: center;
+            box-align: center;
+            color: #ffffff;
+            text-align: center;
+            cursor: pointer;
+        }
+
+        #collimator1 {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        #collimator2 {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        #telescope {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 600px;
+            height: 600px;
+            border: 500px solid black; /*把边调的足够粗，就可以覆盖整个背景，我真tn聪明*/
+            border-radius: 50%;
+        }
+
+        #playerState {
+            position: absolute;
+            font-size:20px;
+            font-style:unset;
+            left: 10%;
+            top: 85%;
+            transform: translate(-50%, -50%);
+        }
+
+
+        /*定义进度条的背景*/
+        #mainBack{
+            width: 250px;
+            height: 28px;
+            background: rgba(10,10,10,0);
+            overflow: hidden;
+            margin: 0 auto;
+        }
+        /*定义进度条*/
+        #progress{
+            width: 250px;
+            height: 28px;
+            margin-top: 1px;
+            border-radius: 40%;
+            background: red;
+            float:left;
+        }
+
+    </style>
+    <title>shoot</title>
+    <script src="../build/three.js"></script>
+    <script src="../build/physi.js"></script>
+</head>
+
+<body style='overflow-y:hidden; overflow-x:hidden' id="html">
+
+<div id="blocker">
+    <div id="instructions">
+        <span style="font-size:40px">点击屏幕开始</span>
+        <br/>
+        <br/>
+        (W, A, S, D = 移动, SPACE = 跳跃, MOUSE = 移动视角, 左键 = 射击)
+        <br/>
+        <br/>
+        (Q = 竖向霰弹, E = 单发, R = 横向霰弹)
+        <br/>
+        <br/>
+        在游戏进行过程中最好不要暂停
+    </div>
+</div>
+
+<div id="collimator1">
+    <p style="font-size:30px; color:red">⊙</p>
+</div>
+
+<div id="telescope">
+    <div id="collimator2">
+        <p style="font-size:30px; color:red">●</p>
+    </div>
+</div>
+
+<div id="playerState">
+    <div>
+        玩家: Player01
+        <br>
+    </div>
+    <div id="weaponChange">
+        子弹: 单发
+        </br>
+    </div>
+    <div>生命值</div>
+    <div id="mainBack">
+        <div id="progress">
+        </div>
+    </div>
+</div>
+
+
+<script type="module">
+
+    import * as THREE from '../build/three.module.js';
+    // import { Physijs } from '../build/physi.js';
+    import {PointerLockControls} from './jsm/controls/PointerLockControls.js';
+    import Stats from './jsm/libs/stats.module.js';
+    import {GLTFLoader} from './jsm/loaders/GLTFLoader.js';
+    import {Octree} from './jsm/math/Octree.js';
+    import {Capsule} from './jsm/math/Capsule.js';
+    import { FBXLoader } from "./jsm/loaders/FBXLoader.js";
+
+
+    /*全局变量声明*/
+    const spheres = [];
+    let sphereIdx = 0;
+    let weapon=4;
+
+    let playerBlood=200;
+
+    const vector1 = new THREE.Vector3();
+    const vector2 = new THREE.Vector3();
+    const vector3 = new THREE.Vector3();
+
+
+    const GRAVITY = 30, BANANA_GUN = 2, CERBERUS = 0, SUB_MACHINE = 1;
+
+    let camera, scene, renderer, controls, aim, firearmsType = SUB_MACHINE;//初始值为0
+    const objects = [];
+    const collimator = new THREE.Vector2(0, 0);//准星
+    const keyStates = {}, mouseStates = {}; //键盘状态，鼠标状态
+    const worldOctree = new Octree();
+    const playerCollider = new Capsule(new THREE.Vector3(0, 1.75, 0), new THREE.Vector3(0, 2.236 * 2, 0), 1.75);
+    const playerVelocity = new THREE.Vector3();
+    const playerDirection = new THREE.Vector3();
+    const clock = new THREE.Clock();
+    let playerOnFloor = false;
+    const collimatorLogo = document.getElementById('collimator1');
+    const sniperScreen = document.getElementById('telescope');
+    const rayCaster = new THREE.Raycaster();
+    let itvChange, itvShoot, itvShootCaster, itvWalk;
+    let firstSightModel;
+
+    const NUM_SPHERES = 3;
+    const SPHERE_RADIUS = 0.2;
+    const sphereGeometry = new THREE.SphereGeometry( SPHERE_RADIUS, 28, 28 );
+    // const sphereGeometry = new THREE.CylinderGeometry(1,5,5,5,5,5);
+    const sphereMaterial = new THREE.MeshStandardMaterial( { color: 0xccac00, roughness: 0.8, metalness: 0.5 } );//0x888855
+
+    let mouseTime = 0;
+
+
+    /*主程序开始*/
+    init();
+    putEnvironment();
+
+    /*主程序结束*/
+
+
+    function initCamera() {
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 1000);//初始化时，camera变量赋值为第一人称相机
+        // camera.position.set(10,10,10);
+
+    }//75, , 0.01,1000
+
+    function initScene() {
+        scene = new THREE.Scene();
+        // let urls = [
+        //     './sky/cloudy_noon_BK.jpg',
+        //     './sky/cloudy_noon_FR.jpg',
+        //     './sky/cloudy_noon_LF.jpg',
+        //     './sky/cloudy_noon_RT.jpg',
+        //     './sky/cloudy_noon_UP.jpg',
+        // ];
+        //
+        // var cubeLoader = new THREE.CubeTextureLoader();
+        // scene.background = cubeLoader.load(urls);
+
+        scene.background = new THREE.Color(0x88ccff);
+        scene.fog = new THREE.Fog(0xffffff, 0, 750); //雾化效果
+
+        for ( let i = 0; i < NUM_SPHERES; i ++ ) {
+
+            const sphere = new THREE.Mesh( sphereGeometry, sphereMaterial );
+            sphere.castShadow = true;
+            sphere.receiveShadow = true;
+            scene.add( sphere );
+            spheres.push( { mesh: sphere, collider: new THREE.Sphere( new THREE.Vector3( 0, - 100, 0 ), SPHERE_RADIUS ), velocity: new THREE.Vector3() } );
+
+        }
+    }
+
+    function initLight() {
+        const ambientLight = new THREE.AmbientLight(0x6688cc);//0x6688cc
+        scene.add(ambientLight);
+
+        const fillLight1 = new THREE.DirectionalLight(0xff9999, 0.5);
+        fillLight1.position.set(-1, 1, 2);
+        scene.add(fillLight1);
+
+        const fillLight2 = new THREE.DirectionalLight(0x8888ff, 0.2);//0x8888ff
+        fillLight2.position.set(0, -1, 0);
+        scene.add(fillLight2);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffaa, 1.2);
+        directionalLight.position.set(-5, 25, -1);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.camera.near = 0.01;
+        directionalLight.shadow.camera.far = 500;
+        directionalLight.shadow.camera.right = 30;
+        directionalLight.shadow.camera.left = -30;
+        directionalLight.shadow.camera.top = 30;
+        directionalLight.shadow.camera.bottom = -30;
+        directionalLight.shadow.mapSize.width = 1024;
+        directionalLight.shadow.mapSize.height = 1024;
+        directionalLight.shadow.radius = 4;
+        directionalLight.shadow.bias = -0.00006;
+        scene.add(directionalLight);
+    }
+
+    function initControls() {
+        controls = new PointerLockControls(camera, document.body);
+        controls.getObject().target = new THREE.Vector3(0, 0, 0);
+        const blocker = document.getElementById('blocker');
+        const instructions = document.getElementById('instructions');
+
+        instructions.addEventListener('click', function () {
+            controls.lock();
+        });
+
+        collimatorLogo.style.display = 'none';
+        sniperScreen.style.display = 'none';
+
+        controls.addEventListener('lock', function () {
+            instructions.style.display = 'none';
+            blocker.style.display = 'none';
+            if (firearmsType !== BANANA_GUN)
+                collimatorLogo.style.display = '';
+            else
+                collimatorLogo.style.display = 'none';
+        });
+        controls.addEventListener('unlock', function () {
+            blocker.style.display = '';
+            instructions.style.display = '';
+            collimatorLogo.style.display = 'none';
+        });
+        scene.add(controls.getObject());
+
+        document.addEventListener('keydown', function (event) {
+            keyStates[event.code] = true;
+            //换子弹动画
+            if (event.code === 'KeyR') {
+                // shootCannonball();
+                // alert("sheji")
+                if (firstSightModel !== undefined) {
+                    const meshMixer = new THREE.AnimationMixer(firstSightModel.scene);
+                    let action = meshMixer.clipAction(firstSightModel.animations[0]);
+                    //换弹动作仅执行一次
+                    action.loop = THREE.LoopOnce;
+                    action.play();
+                    itvChange = setInterval(function () {
+                        meshMixer.update(0.01);//更新动作
+                    }, 10);
+                }
+            }
+
+        });
+
+        document.addEventListener('keyup', function (event) {
+            keyStates[event.code] = false;
+        });
+
+        document.addEventListener('mousedown', (event) => {
+            // mouseTime = performance.now();
+            //左键
+            if (event.button === 0) {
+                if (firearmsType === SUB_MACHINE) {
+                    clearInterval(itvWalk);
+                    //枪的抖动--动画
+                    //throwBall();
+                    if (firstSightModel !== undefined) {
+                        const meshMixer = new THREE.AnimationMixer(firstSightModel.scene);
+                        meshMixer.clipAction(firstSightModel.animations[2]).play();
+                        itvShoot = setInterval(function () {
+                            meshMixer.update(0.1);//更新动作
+
+                        }, 10);
+                        itvShootCaster = setInterval(function () {
+                            rayCaster.setFromCamera(collimator, camera);
+                            const intersects = rayCaster.intersectObjects(objects);
+                            console.log(intersects);
+                        }, 50);
+                    }
+                }
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (weapon===0){
+                throwBall();
+            }
+            if (weapon===1){
+                throwBall2();
+            }
+            if (weapon===2){
+                throwBall3();
+            }
+            clearInterval(itvShoot);
+            clearInterval(itvShootCaster);
+        });
+        // let mouseWheel = true;
+        // document.onmousewheel = function (event) {
+        //
+        //     mouseWheel = (remoteDegree === firstDegree);
+        //
+        //     if (mouseWheel === true) {
+        //         console.log(event.wheelDelta);
+        //         if (event.wheelDelta > 0) {
+        //             firearmsType++;
+        //         } else if (event.wheelDelta < 0) {
+        //             firearmsType--;
+        //         }
+        //         firearmsType = (firearmsType + 3) % 3;
+        //         console.log(firearmsType);
+        //
+        //         cutGun(firearmsType);
+        //     }
+        // }
+    }
+
+    function getHumanBoundingBox(human) {
+        let humanBoundingBox;
+        let humanWidth = 2, humanHeight = 2.236 * 2, humanDepth = 2;
+        let humanBoxPosition = new THREE.Vector3();
+        humanBoxPosition.x = human.position.x;
+        humanBoxPosition.y = human.position.y + 2.4;
+        humanBoxPosition.z = human.position.z;
+        // console.log(humanBoxPosition.x, humanBoxPosition.y, humanBoxPosition.z)
+        //得出human的包围盒（Mesh类型）
+        humanBoundingBox = new THREE.Mesh(
+            new THREE.BoxGeometry(humanWidth, humanHeight, humanDepth),
+            new THREE.MeshBasicMaterial().visible = false
+        )
+        humanBoundingBox.position.set(
+            humanBoxPosition.x,
+            humanBoxPosition.y,
+            humanBoxPosition.z
+        );
+        scene.add(humanBoundingBox);
+
+        return humanBoundingBox;
+    }
+
+    function putHuman(src) {
+        new GLTFLoader().load(src, function (glb) {
+            scene.add(glb.scene);
+            glb.scene.scale.set(2, 2, 2);//5,5,5
+            glb.scene.position.set(-20, 1, 30);//0,-8.5,0
+
+            // glb.scene.visible=false
+
+            worldOctree.fromGraphNode(glb.scene);
+
+            glb.scene.traverse(child => {
+
+                if (child.isMesh) {
+
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+
+                    if (child.material.map) {
+
+                        child.material.map.anisotropy = 8;
+
+                    }
+
+                }
+
+            });
+
+            // objects.push(getHumanBoundingBox(glb.scene));
+            // console.log(objects);
+
+            playAnimation(glb);
+            animateMonster();
+
+            function playAnimation(G) {
+                //播放动画
+                const meshMixer = new THREE.AnimationMixer(G.scene);
+                // const meshMixer2 = new THREE.AnimationMixer(G.scene);
+                // const meshMixer3 = new THREE.AnimationMixer(G.scene);
+                meshMixer.clipAction(G.animations[0]).play();
+                // meshMixer2.clipAction(G.animations[1]).play();
+                // meshMixer3.clipAction(G.animations[2]).play();
+                setInterval(function () {
+                    glb.scene.position.z += 0.05;
+                    meshMixer.update(0.01);//更新动作
+                    // meshMixer2.update(0.01);//更新动作
+                    // meshMixer3.update(0.01);//更新动作
+                }, 20);
+            }
+
+            function animateMonster() {
+                //glb.scene.position.z += 0.05;
+                // console.log(glb.scene)
+                objects.push(getHumanBoundingBox(glb.scene));
+
+                if (glb.scene.visible === true) {
+
+                    if(glb.scene.position.x - playerCollider.end.x < 1 && glb.scene.position.x - playerCollider.end.x > -1){
+                        console.log("yes")
+                        document.getElementById("progress").style.width=playerBlood+"px";
+                        playerBlood-=2;
+                    }
+
+                    for (let i = 0; i < NUM_SPHERES; i++) {
+                        //console.log(spheres[i].mesh.position)
+                        if (glb.scene.position.x - spheres[i].mesh.position.x < 0.05 && glb.scene.position.x - spheres[i].mesh.position.x > -0.05) {
+                            glb.scene.visible = false;
+
+                            //console.log("yincang");
+                        }
+                    }
+                }
+
+
+                // console.log(glb.scene.position.z)
+                renderer.render(scene, camera);
+                requestAnimationFrame(animateMonster);
+            }
+
+            //setInterval(animateMonster,10);
+
+        });
+    }
+
+    function putBird(src) {
+        new GLTFLoader().load(src, function (glb) {
+            scene.add(glb.scene);
+            glb.scene.scale.set(1.5, 1.5, 1.5);//5,5,5
+            glb.scene.position.set(-20, 10, 30);//0,-8.5,0
+
+            console.log(glb.animations)
+
+            // glb.scene.visible=false
+
+            worldOctree.fromGraphNode(glb.scene);
+
+            glb.scene.traverse(child => {
+
+                if (child.isMesh) {
+
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                    if (child.material.map) {
+                        child.material.map.anisotropy = 8;
+                    }
+                }
+            });
+
+            // objects.push(getHumanBoundingBox(glb.scene));
+            // console.log(objects);
+
+            playAnimation(glb);
+            animateMonster();
+
+            function playAnimation(G) {//播放动画
+                const meshMixer = new THREE.AnimationMixer(G.scene);
+                // const meshMixer2 = new THREE.AnimationMixer(G.scene);
+                // const meshMixer3 = new THREE.AnimationMixer(G.scene);
+                meshMixer.clipAction(G.animations[0]).play();
+                meshMixer.clipAction(G.animations[1]).play();
+                meshMixer.clipAction(G.animations[2]).play();
+
+                //console.log(playerVelocity)
+
+                // meshMixer2.clipAction(G.animations[1]).play();
+                // meshMixer3.clipAction(G.animations[2]).play();
+                setInterval(function () {
+                    meshMixer.update(0.01);//更新动作
+                    // meshMixer2.update(0.01);//更新动作
+                    // meshMixer3.update(0.01);//更新动作
+                }, 20);
+            }
+
+            function animateMonster() {
+
+                //鸟的巡路路线
+                var radius;
+                if (glb.scene.position.x - playerCollider.end.x < 20 && glb.scene.position.x - playerCollider.end.x > -20) {
+                    console.log("yes")
+                    if (glb.scene.position.x > playerCollider.end.x) {
+                        glb.scene.position.x -= 0.1;
+                    }
+                    if (glb.scene.position.x < playerCollider.end.x) {
+                        glb.scene.position.x += 0.1;
+                    }
+                    // if(glb.scene.position.y>playerCollider.end.y){ glb.scene.position.y -= 0.03;}
+                    // if(glb.scene.position.y<playerCollider.end.y){ glb.scene.position.y += 0.03;}
+                    if (glb.scene.position.z > playerCollider.end.z) {
+                        glb.scene.position.z -= 0.1;
+                    }
+                    if (glb.scene.position.z < playerCollider.end.z) {
+                        glb.scene.position.z += 0.1;
+                    }
+                } else {
+                    if(glb.scene.position.z<40){ glb.scene.rotation.y+=0.01;glb.scene.position.z-=0.05;}
+                    else if (glb.scene.position.z>20){ glb.scene.rotation.y+=0.01;glb.scene.position.z+=0.05;}
+                }
+
+
+
+                //glb.scene.position.z += 0.01;
+                // console.log(glb.scene)
+                //console.log(playerCollider.end)
+                objects.push(getHumanBoundingBox(glb.scene));
+
+                if (glb.scene.visible === true) {
+                    if(glb.scene.position.x - playerCollider.end.x < 1 && glb.scene.position.x - playerCollider.end.x > -1){
+                        console.log("yes")
+                        document.getElementById("progress").style.width=playerBlood+"px";
+                        playerBlood-=2;
+                        //document.getElementById("html").style.filter="grey";
+                    }
+
+                    for (let i = 0; i < NUM_SPHERES; i++) {
+                        //console.log(spheres[i].mesh.position)
+                        if (glb.scene.position.x - spheres[i].mesh.position.x < 0.05 && glb.scene.position.x - spheres[i].mesh.position.x > -0.05) {
+                            glb.scene.visible = false;
+                            //console.log("yincang");
+                        }
+                    }
+                }
+
+
+                // console.log(glb.scene.position.z)
+                renderer.render(scene, camera);
+                requestAnimationFrame(animateMonster);
+            }
+
+            //setInterval(animateMonster,10);
+
+        });
+    }
+
+        function putSoilder(src) {
+            new GLTFLoader().load(src, function (glb) {
+                scene.add(glb.scene);
+                glb.scene.scale.set(2, 2, 2);//5,5,5
+                glb.scene.position.set(-10, 1, 10);//0,-8.5,0
+
+                // glb.scene.visible=false
+
+                worldOctree.fromGraphNode(glb.scene);
+
+                glb.scene.traverse( child => {
+
+                    if ( child.isMesh ) {
+
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+
+                        if ( child.material.map ) {
+
+                            child.material.map.anisotropy = 8;
+
+                        }
+                    }
+
+                } );
+
+                // objects.push(getHumanBoundingBox(glb.scene));
+                // console.log(objects);
+
+                // playAnimation(glb);
+                animateMonster();
+
+                function playAnimation(G) {//播放动画
+                    const meshMixer = new THREE.AnimationMixer(G.scene);
+                    // const meshMixer2 = new THREE.AnimationMixer(G.scene);
+                    // const meshMixer3 = new THREE.AnimationMixer(G.scene);
+                    meshMixer.clipAction(G.animations[3]).play();
+                    // meshMixer2.clipAction(G.animations[1]).play();
+                    // meshMixer3.clipAction(G.animations[2]).play();
+                    setInterval(function () {
+                        meshMixer.update(0.01);//更新动作
+                        // meshMixer2.update(0.01);//更新动作
+                        // meshMixer3.update(0.01);//更新动作
+                    }, 20);
+                }
+
+                function animateMonster(){
+                    glb.scene.position.z += 0.01;
+                    // console.log(glb.scene)
+                    objects.push(getHumanBoundingBox(glb.scene));
+                    //throwBall2();
+
+                    // if(glb.scene.visible===true) {
+                    //     for (var i = 0; i < NUM_SPHERES; i++) {
+                    //         //console.log(spheres[i].mesh.position)
+                    //         if (getHumanBoundingBox(glb.scene).position.x - spheres[i].mesh.position.x < 10 && getHumanBoundingBox(glb.scene).position.x - spheres[i].mesh.position.x > -10) {
+                    //             glb.scene.visible = false;
+                    //             //console.log("yincang");
+                    //         }
+                    //     }
+                    // }
+
+
+                    // console.log(glb.scene.position.z)
+                    renderer.render(scene,camera);
+                    requestAnimationFrame(animateMonster);
+                }
+                //setInterval(animateMonster,10);
+
+            });
+
+        // const loader= new FBXLoader();
+        //
+        // loader.load(src,function (glb){
+        //     scene.add(glb.scene);
+        //     glb.scene.scale.set(2, 2, 2);//5,5,5
+        //     glb.scene.position.set(10, 1, 0);//0,-8.5,0
+        //
+        //     objects.push(getHumanBoundingBox(glb.scene));
+        //     // console.log(objects);
+        //
+        //     playAnimation(glb);
+        //
+        //     function playAnimation(G) {//播放动画
+        //         const meshMixer = new THREE.AnimationMixer(G.scene);
+        //         // const meshMixer2 = new THREE.AnimationMixer(G.scene);
+        //         // const meshMixer3 = new THREE.AnimationMixer(G.scene);
+        //         meshMixer.clipAction(G.animations[3]).play();
+        //         // meshMixer2.clipAction(G.animations[1]).play();
+        //         // meshMixer3.clipAction(G.animations[2]).play();
+        //         setInterval(function () {
+        //             meshMixer.update(0.01);//更新动作
+        //             // meshMixer2.update(0.01);//更新动作
+        //             // meshMixer3.update(0.01);//更新动作
+        //         }, 20);
+        //     }
+        // });
+    }
+
+
+    function putMonster(src) {
+        new GLTFLoader().load(src, function (glb) {
+            scene.add(glb.scene);
+            glb.scene.scale.set(2, 2, 2);//5,5,5
+            glb.scene.position.set(50, 1, 80);//0,-8.5,0
+
+            console.log(glb.animations)
+            // glb.scene.visible=false
+
+            worldOctree.fromGraphNode(glb.scene);
+
+            glb.scene.traverse( child => {
+
+                if ( child.isMesh ) {
+
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+
+                    if ( child.material.map ) {
+
+                        child.material.map.anisotropy = 8;
+
+                    }
+
+                }
+
+            } );
+
+            // objects.push(getHumanBoundingBox(glb.scene));
+            // console.log(objects);
+
+            playAnimation(glb);
+            animateMonster();
+
+            function playAnimation(G) {//播放动画
+                const meshMixer = new THREE.AnimationMixer(G.scene);
+                // const meshMixer2 = new THREE.AnimationMixer(G.scene);
+                // const meshMixer3 = new THREE.AnimationMixer(G.scene);
+                meshMixer.clipAction(G.animations[0]).play();
+                // meshMixer2.clipAction(G.animations[1]).play();
+                // meshMixer3.clipAction(G.animations[2]).play();
+                setInterval(function () {
+                    meshMixer.update(0.01);//更新动作
+                    // meshMixer2.update(0.01);//更新动作
+                    // meshMixer3.update(0.01);//更新动作
+                }, 20);
+            }
+
+            function animateMonster(){
+                glb.scene.position.z += 0.01;
+                // console.log(glb.scene)
+                objects.push(getHumanBoundingBox(glb.scene));
+
+                if(glb.scene.visible===true) {
+
+                    if(glb.scene.position.x - playerCollider.end.x < 1 && glb.scene.position.x - playerCollider.end.x > -1){
+                        console.log("yes")
+                        document.getElementById("progress").style.width=playerBlood+"px";
+                        playerBlood-=2;
+                    }
+
+                    for (let i = 0; i < NUM_SPHERES; i++) {
+                        //console.log(spheres[i].mesh.position)
+                        if (glb.scene.position.x - spheres[i].mesh.position.x < 0.05 && glb.scene.position.x - spheres[i].mesh.position.x > -0.05) {
+                            glb.scene.visible = false;
+                            console.log("yincang");
+                        }
+                    }
+                }
+
+
+                // console.log(glb.scene.position.z)
+                renderer.render(scene,camera);
+                requestAnimationFrame(animateMonster);
+            }
+            //setInterval(animateMonster,10);
+
+        });
+
+        // const loader= new FBXLoader();
+        //
+        // loader.load(src,function (glb){
+        //     scene.add(glb.scene);
+        //     glb.scene.scale.set(2, 2, 2);//5,5,5
+        //     glb.scene.position.set(10, 1, 0);//0,-8.5,0
+        //
+        //     objects.push(getHumanBoundingBox(glb.scene));
+        //     // console.log(objects);
+        //
+        //     playAnimation(glb);
+        //
+        //     function playAnimation(G) {//播放动画
+        //         const meshMixer = new THREE.AnimationMixer(G.scene);
+        //         // const meshMixer2 = new THREE.AnimationMixer(G.scene);
+        //         // const meshMixer3 = new THREE.AnimationMixer(G.scene);
+        //         meshMixer.clipAction(G.animations[3]).play();
+        //         // meshMixer2.clipAction(G.animations[1]).play();
+        //         // meshMixer3.clipAction(G.animations[2]).play();
+        //         setInterval(function () {
+        //             meshMixer.update(0.01);//更新动作
+        //             // meshMixer2.update(0.01);//更新动作
+        //             // meshMixer3.update(0.01);//更新动作
+        //         }, 20);
+        //     }
+        // });
+    }
+
+   ///////////// ********
+
+    function initPlayer() {
+
+        new GLTFLoader().load("./models/gltf/me.glb", function (glb) {//me
+            firstSightModel = glb;
+            glb.scene.traverse(node => {
+                if (node.frustumCulled) node.frustumCulled = false;
+            });
+            glb.scene.rotateY(Math.PI);
+            glb.scene.scale.set(0.5,0.5,0.5);//0.5,0.5,0.5
+            glb.scene.position.set(0.1, 0.1,0.05);//（0.2, -1.3, 0.1）为m4a1最佳放置位置//0.1,0.1,0.05
+            glb.scene.name = "m4a1";
+            // camera.position.set(10,10,10);
+            camera.add(glb.scene);//相机与人物
+            // camera.lookAt(0,0,0);
+            //walk
+            const meshMixer = new THREE.AnimationMixer(firstSightModel.scene);
+            meshMixer.clipAction(firstSightModel.animations[3]).play();
+            itvWalk = setInterval(function () {
+                meshMixer.update(0.01);//更新动作
+            }, 10);
+        });
+
+    }
+
+
+
+    ///********************
+
+    // function cutGun(firearmsType) {
+    //     if (camera.getObjectByName("cerberus") !== undefined &&
+    //         camera.getObjectByName("sub-machine-gun") !== undefined &&
+    //         camera.getObjectByName("banana-gun") !== undefined) {
+    //
+    //         switch (firearmsType) {
+    //             case CERBERUS:
+    //                 collimatorLogo.style.display = '';
+    //                 sniperScreen.style.display = 'none';
+    //                 camera.getObjectByName("cerberus").visible = true;
+    //                 camera.getObjectByName("sub-machine-gun").visible = false;
+    //                 camera.getObjectByName("banana-gun").visible = false;
+    //                 break;
+    //             case SUB_MACHINE:
+    //                 collimatorLogo.style.display = '';
+    //                 sniperScreen.style.display = 'none';
+    //                 camera.getObjectByName("cerberus").visible = false;
+    //                 camera.getObjectByName("sub-machine-gun").visible = true;
+    //                 camera.getObjectByName("banana-gun").visible = false;
+    //                 break;
+    //             case BANANA_GUN:
+    //                 collimatorLogo.style.display = 'none';
+    //                 camera.getObjectByName("cerberus").visible = false;
+    //                 camera.getObjectByName("sub-machine-gun").visible = false;
+    //                 camera.getObjectByName("banana-gun").visible = true;
+    //                 break;
+    //
+    //         }
+    //     }
+    // }
+
+    function addModels() {
+
+        initPlayer();
+
+        /*添加世界坐标轴*/
+        const axisHelper = new THREE.AxesHelper(2);
+        scene.add(axisHelper);
+
+        /*靶子*/
+        const boxGeometry = new THREE.BoxGeometry(40, 40, 20);
+        // const colorsBox = [];
+        const boxMaterial = new THREE.MeshBasicMaterial({color: 0x0000ff});
+        aim = new THREE.Mesh(boxGeometry, boxMaterial);
+        aim.position.set(0, 100, 50);
+        objects.push(aim);
+        //scene.add(aim);
+        /*human*/
+        //putSoilder("./models/gltf/model.glb");
+        putHuman("./models/gltf/small-monster1.glb");
+        putMonster("./models/gltf/small-monster1.glb");
+        putBird("./models/gltf/bird7.glb");
+
+    }
+
+    function putEnvironment() {
+        // var tmaterial = new THREE.MeshBasicMaterial();
+        const loader = new GLTFLoader().setPath('./models/gltf/');
+        loader.load('city.glb', (g) => {
+            g.scene.scale.set(200, 200, 200);
+            // g.scene.material=tmaterial;
+            scene.add(g.scene);
+            //Octree根据glb模型，形成节点
+            worldOctree.fromGraphNode(g.scene);
+
+            g.scene.traverse(child => {
+
+                if (child.isMesh) {
+                    //这里是为island模型准备的
+                    // child.material.emissive =  child.material.color;
+                    // child.material.emissiveMap = child.material.map ;
+
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                    if (child.material.map) {
+                        child.material.map.anisotropy = 9;
+                    }
+                }
+            });
+
+            // putHuman("./models/gltf/small-monster1.glb");
+
+            animate();
+
+        });
+
+
+    }
+
+    function render() {
+        renderer = new THREE.WebGLRenderer({antialias: true});
+        renderer.autoClear = false;
+        renderer.gammaInput = true;
+        renderer.gammaOutput = true;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.VSMShadowMap;
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        window.addEventListener('resize', onWindowResize);
+    }
+
+    function playerCollisions() {
+        //检测Octree是否和自己碰撞
+        const result = worldOctree.capsuleIntersect(playerCollider);
+        playerOnFloor = false;
+        if (result) {
+            playerOnFloor = result.normal.y > 0;
+            if (!playerOnFloor) {
+                playerVelocity.addScaledVector(result.normal, -result.normal.dot(playerVelocity));
+            }
+            playerCollider.translate(result.normal.multiplyScalar(result.depth));
+        }
+    }
+
+    function updatePlayer(deltaTime) {
+        if (playerOnFloor) {
+            const damping = Math.exp(-3 * deltaTime) - 1;
+            playerVelocity.addScaledVector(playerVelocity, damping);
+        } else {
+            playerVelocity.y -= GRAVITY * deltaTime;
+        }
+        const deltaPosition = playerVelocity.clone().multiplyScalar(deltaTime);
+        playerCollider.translate(deltaPosition);
+        playerCollisions();
+        camera.position.copy(playerCollider.end);
+        //console.log(playerVelocity)
+    }
+
+    function getForwardVector() {
+        camera.getWorldDirection(playerDirection);
+        playerDirection.y = 0;
+        playerDirection.normalize();
+        return playerDirection;
+    }
+
+    function getSideVector() {
+        camera.getWorldDirection(playerDirection);
+        playerDirection.y = 0;
+        playerDirection.normalize();
+        playerDirection.cross(camera.up);
+        return playerDirection;
+    }
+
+    function controller(deltaTime) {
+        let speed = 40;
+        let weapName;
+        if (playerOnFloor) {
+            if (keyStates['KeyW']) {
+                playerVelocity.add(getForwardVector().multiplyScalar(speed * deltaTime));
+            }
+            if (keyStates['KeyS']) {
+                playerVelocity.add(getForwardVector().multiplyScalar(-speed * deltaTime));
+            }
+            if (keyStates['KeyA']) {
+                playerVelocity.add(getSideVector().multiplyScalar(-speed * deltaTime));
+            }
+            if (keyStates['KeyD']) {
+                playerVelocity.add(getSideVector().multiplyScalar(speed * deltaTime));
+            }
+            if (keyStates['Space']) {
+                playerVelocity.y = 25;
+            }
+            if (keyStates['KeyQ']) {
+                weapon =  0;
+                if(weapon===0){weapName="束向霰弹"}
+                if(weapon===1){weapName="单发"}
+                if(weapon===2){weapName="横向霰弹"}
+                document.getElementById("weaponChange").innerHTML="子弹: "+weapName;
+            }
+            if (keyStates['KeyE']) {
+                weapon =  1;
+                if(weapon===0){weapName="束向霰弹"}
+                if(weapon===1){weapName="单发"}
+                if(weapon===2){weapName="横向霰弹"}
+                document.getElementById("weaponChange").innerHTML="子弹: "+weapName;
+            }
+            if (keyStates['KeyR']) {
+                weapon =  2;
+                if(weapon===0){weapName="束向霰弹"}
+                if(weapon===1){weapName="单发"}
+                if(weapon===2){weapName="横向霰弹"}
+                document.getElementById("weaponChange").innerHTML="子弹: "+weapName;
+            }
+            if (keyStates['KeyV']) {
+                speed =60;
+            }
+
+        }
+    }
+
+    function init() {
+        initCamera();
+        initScene();
+        initLight();
+        addModels();
+        initControls();
+        render();
+    }
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        const deltaTime = Math.min(0.1, clock.getDelta());
+        if (controls.isLocked === true) {
+
+            controller(deltaTime);
+
+            updatePlayer(deltaTime);
+            updateSpheres( deltaTime );
+            // console.log(spheres[0].position)
+
+        }
+        renderer.render(scene, camera);
+    }
+
+    function throwBall() {
+
+        // const sphere = spheres[ sphereIdx ];
+        //
+        // camera.getWorldDirection( playerDirection );
+        //
+        // sphere.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+        //
+        // // throw the ball with more force if we hold the button longer, and if we move forward
+        //
+        // // const impulse = 15 + 30 * ( 1 - Math.exp( ( mouseTime - performance.now() ) * 0.001 ) );
+        // //
+        // // sphere.velocity.copy( playerDirection ).multiplyScalar( impulse );
+        // sphere.velocity.copy(playerDirection).multiplyScalar(100);
+        // console.log(playerDirection)
+        // sphere.velocity.addScaledVector( playerVelocity, 2 );
+        //
+        // sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+
+        const sphere1 = spheres[ sphereIdx ];
+        sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+        const sphere2 = spheres[ sphereIdx ];
+        sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+        const sphere3 = spheres[ sphereIdx ];
+
+
+
+        camera.getWorldDirection( playerDirection );
+
+        sphere1.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+        sphere2.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+        sphere3.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+
+        // throw the ball with more force if we hold the button longer, and if we move forward
+
+        // const impulse = 15 + 30 * ( 1 - Math.exp( ( mouseTime - performance.now() ) * 0.001 ) );
+        //
+        // sphere.velocity.copy( playerDirection ).multiplyScalar( impulse );
+        let newDirection1  = new THREE.Vector3();
+        newDirection1.x=playerDirection.x;
+        newDirection1.y=playerDirection.y+0.15;
+        newDirection1.z=playerDirection.z;
+        sphere1.velocity.copy(newDirection1).multiplyScalar(75);//100
+
+        let newDirection2  = new THREE.Vector3();
+        newDirection2.x=playerDirection.x;
+        newDirection2.y=playerDirection.y+0.05;
+        newDirection2.z=playerDirection.z;
+        sphere2.velocity.copy(newDirection2).multiplyScalar(75);
+
+        let newDirection3  = new THREE.Vector3();
+        newDirection3.x=playerDirection.x;
+        newDirection3.y=playerDirection.y-0.05;
+        newDirection3.z=playerDirection.z;
+        sphere3.velocity.copy(newDirection3).multiplyScalar(75);
+
+        console.log(playerDirection)
+        sphere1.velocity.addScaledVector( playerVelocity, 2 );
+        sphere2.velocity.addScaledVector( playerVelocity, 2 );
+        sphere3.velocity.addScaledVector( playerVelocity, 2 );
+
+        sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+
+    }
+
+    function throwBall2(){
+        const sphere = spheres[ sphereIdx ];
+
+        camera.getWorldDirection( playerDirection );
+
+        sphere.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+
+        // throw the ball with more force if we hold the button longer, and if we move forward
+
+        // const impulse = 15 + 30 * ( 1 - Math.exp( ( mouseTime - performance.now() ) * 0.001 ) );
+        //
+        // sphere.velocity.copy( playerDirection ).multiplyScalar( impulse );
+        sphere.velocity.copy(playerDirection).multiplyScalar(100);
+        console.log(playerDirection)
+        sphere.velocity.addScaledVector( playerVelocity, 2 );
+
+        sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+    }
+
+
+    function throwBall3() {
+
+        // const sphere = spheres[ sphereIdx ];
+        //
+        // camera.getWorldDirection( playerDirection );
+        //
+        // sphere.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+        //
+        // // throw the ball with more force if we hold the button longer, and if we move forward
+        //
+        // // const impulse = 15 + 30 * ( 1 - Math.exp( ( mouseTime - performance.now() ) * 0.001 ) );
+        // //
+        // // sphere.velocity.copy( playerDirection ).multiplyScalar( impulse );
+        // sphere.velocity.copy(playerDirection).multiplyScalar(100);
+        // console.log(playerDirection)
+        // sphere.velocity.addScaledVector( playerVelocity, 2 );
+        //
+        // sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+
+        //const sphere1 = spheres[0];
+        //sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+        const sphere2 = spheres[sphereIdx];
+        sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+        //const sphere3 = spheres[2];
+        //sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+        //const sphere4 = spheres[3];
+        //sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+        const sphere5 = spheres[sphereIdx];
+        sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+        //const sphere6 = spheres[5];
+        //sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+        // const sphere7 = spheres[6];
+        // //sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+         const sphere8 = spheres[sphereIdx];
+        //sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+        // const sphere9 = spheres[8];
+        // //sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+
+        console.log(sphereIdx)
+
+        camera.getWorldDirection( playerDirection );
+
+        //sphere1.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+        sphere2.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+        //sphere3.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+        //sphere4.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+        sphere5.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+        //sphere6.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+         //sphere7.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+         sphere8.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+        // sphere9.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+
+        // throw the ball with more force if we hold the button longer, and if we        sphere3.collider.center.copy( playerCollider.end ).addScaledVector( playerDirection, playerCollider.radius * 1.5 );
+
+        // const impulse = 15 + 30 * ( 1 - Math.exp( ( mouseTime - performance.now() ) * 0.001 ) );
+        //
+        // sphere.velocity.copy( playerDirection ).multiplyScalar( impulse );
+
+        // let newDirection1  = new THREE.Vector3();
+        // newDirection1.x=playerDirection.x;
+        // newDirection1.y=playerDirection.y+0.15;
+        // newDirection1.z=playerDirection.z;
+        // sphere1.velocity.copy(newDirection1).multiplyScalar(50);//100
+
+        let newDirection2  = new THREE.Vector3();
+        newDirection2.x=playerDirection.x;
+        newDirection2.y=playerDirection.y+0.05;
+        newDirection2.z=playerDirection.z;
+        sphere2.velocity.copy(newDirection2).multiplyScalar(50);//100
+
+        // let newDirection3  = new THREE.Vector3();
+        // newDirection3.x=playerDirection.x;
+        // newDirection3.y=playerDirection.y-0.15;
+        // newDirection3.z=playerDirection.z;
+        // sphere3.velocity.copy(newDirection3).multiplyScalar(50);//100
+        //
+        // let newDirection4  = new THREE.Vector3();
+        // newDirection4.x=playerDirection.x+0.1;
+        // newDirection4.y=playerDirection.y+0.15;
+        // newDirection4.z=playerDirection.z;
+        // sphere4.velocity.copy(newDirection4).multiplyScalar(50);//100
+
+        let newDirection5  = new THREE.Vector3();
+        newDirection5.x=playerDirection.x+0.1;
+        newDirection5.y=playerDirection.y+0.05;
+        newDirection5.z=playerDirection.z;
+        sphere5.velocity.copy(newDirection5).multiplyScalar(50);//100
+
+        // let newDirection6  = new THREE.Vector3();
+        // newDirection6.x=playerDirection.x+0.1;
+        // newDirection6.y=playerDirection.y-0.15;
+        // newDirection6.z=playerDirection.z;
+        // sphere6.velocity.copy(newDirection6).multiplyScalar(50);//100
+        //
+        // let newDirection7  = new THREE.Vector3();
+        // newDirection7.x=playerDirection.x-0.1;
+        // newDirection7.y=playerDirection.y+0.15;
+        // newDirection7.z=playerDirection.z;
+        // sphere7.velocity.copy(newDirection7).multiplyScalar(50);//100
+        //
+        let newDirection8  = new THREE.Vector3();
+        newDirection8.x=playerDirection.x-0.1;
+        newDirection8.y=playerDirection.y+0.05;
+        newDirection8.z=playerDirection.z;
+        sphere8.velocity.copy(newDirection8).multiplyScalar(50);//100
+        //
+        // let newDirection9  = new THREE.Vector3();
+        // newDirection9.x=playerDirection.x-0.1;
+        // newDirection9.y=playerDirection.y-0.15;
+        // newDirection9.z=playerDirection.z;
+        // sphere9.velocity.copy(newDirection9).multiplyScalar(50);//100
+
+        //sphere2.velocity.copy(newDirection1).multiplyScalar(50);
+        //sphere3.velocity.copy(newDirection1).multiplyScalar(25);
+
+        //console.log(playerDirection)
+        //sphere1.velocity.addScaledVector( playerVelocity, 2 );
+         sphere2.velocity.addScaledVector( playerVelocity, 2 );
+        // sphere3.velocity.addScaledVector( playerVelocity, 2 );
+        //sphere4.velocity.addScaledVector( playerVelocity, 2 );
+         sphere5.velocity.addScaledVector( playerVelocity, 2 );
+        // sphere6.velocity.addScaledVector( playerVelocity, 2 );
+        //sphere7.velocity.addScaledVector( playerVelocity, 2 );
+         sphere8.velocity.addScaledVector( playerVelocity, 2 );
+        // sphere9.velocity.addScaledVector( playerVelocity, 2 );
+
+
+        sphereIdx = ( sphereIdx + 1 ) % spheres.length;
+
+    }
+
+    function updateSpheres( deltaTime ) {
+
+        spheres.forEach( sphere => {
+
+            sphere.collider.center.addScaledVector( sphere.velocity, deltaTime );
+
+            const result = worldOctree.sphereIntersect( sphere.collider );
+
+            if ( result ) {
+
+                sphere.velocity.addScaledVector( result.normal, - result.normal.dot( sphere.velocity ) * 1.5 );
+                sphere.collider.center.add( result.normal.multiplyScalar( result.depth ) );
+
+            } else {
+
+                sphere.velocity.y -= GRAVITY * deltaTime;
+                //sphere.velocity.x -= GRAVITY * deltaTime;
+            }
+
+            const damping = Math.exp( - 1.5 * deltaTime ) - 1;
+            sphere.velocity.addScaledVector( sphere.velocity, damping );
+
+            // console.log(sphere.position)
+
+            playerSphereCollision( sphere );
+
+        } );
+
+        spheresCollisions();
+
+        for ( const sphere of spheres ) {
+            // console.log(sphere.mesh.position)
+
+            sphere.mesh.position.copy( sphere.collider.center );
+
+        }
+
+    }
+
+    function playerSphereCollision( sphere ) {
+
+        const center = vector1.addVectors( playerCollider.start, playerCollider.end ).multiplyScalar( 0.5 );
+
+        const sphere_center = sphere.collider.center;
+
+        const r = playerCollider.radius + sphere.collider.radius;
+        const r2 = r * r;
+
+        // approximation: player = 3 spheres
+
+        for ( const point of [ playerCollider.start, playerCollider.end, center ] ) {
+
+            const d2 = point.distanceToSquared( sphere_center );
+
+            if ( d2 < r2 ) {
+
+                const normal = vector1.subVectors( point, sphere_center ).normalize();
+                const v1 = vector2.copy( normal ).multiplyScalar( normal.dot( playerVelocity ) );
+                const v2 = vector3.copy( normal ).multiplyScalar( normal.dot( sphere.velocity ) );
+
+                playerVelocity.add( v2 ).sub( v1 );
+                sphere.velocity.add( v1 ).sub( v2 );
+
+                const d = ( r - Math.sqrt( d2 ) ) / 2;
+                sphere_center.addScaledVector( normal, - d );
+
+            }
+
+        }
+
+    }
+
+    function spheresCollisions() {
+
+        for ( let i = 0, length = spheres.length; i < length; i ++ ) {
+
+            const s1 = spheres[ i ];
+
+            for ( let j = i + 1; j < length; j ++ ) {
+
+                const s2 = spheres[ j ];
+
+                const d2 = s1.collider.center.distanceToSquared( s2.collider.center );
+                const r = s1.collider.radius + s2.collider.radius;
+                const r2 = r * r;
+
+                if ( d2 < r2 ) {
+
+                    const normal = vector1.subVectors( s1.collider.center, s2.collider.center ).normalize();
+                    const v1 = vector2.copy( normal ).multiplyScalar( normal.dot( s1.velocity ) );
+                    const v2 = vector3.copy( normal ).multiplyScalar( normal.dot( s2.velocity ) );
+
+                    s1.velocity.add( v2 ).sub( v1 );
+                    s2.velocity.add( v1 ).sub( v2 );
+
+                    const d = ( r - Math.sqrt( d2 ) ) / 2;
+
+                    s1.collider.center.addScaledVector( normal, d );
+                    s2.collider.center.addScaledVector( normal, - d );
+
+                }
+
+            }
+
+        }
+
+    }
+
+</script>
+</body>
+
+</html>
